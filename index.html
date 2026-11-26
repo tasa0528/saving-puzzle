@@ -248,9 +248,10 @@ function paintPuzzle(cv, g){
     ctx.fillRect((i % GRID) * PX, Math.floor(i / GRID) * PX, PX, PX);
   }
 }
+let shareGoal = null;   // 공유받은 목표 (읽기 전용 화면에서만 써요)
 function paintAll(){
   document.querySelectorAll("canvas[data-gid]").forEach(cv => {
-    const g = goals.find(x => x.id === cv.dataset.gid);
+    const g = goals.find(x => x.id === cv.dataset.gid) || (shareGoal && shareGoal.id === cv.dataset.gid ? shareGoal : null);
     if(g) paintPuzzle(cv, g);
   });
 }
@@ -307,6 +308,7 @@ function nav(path){            // 화면 이동: nav("/new") 처럼 써요
 function route(){
   autoPay();                       // 화면을 그릴 때마다 지난 납입일이 있는지 확인해요
   const h = current.replace(/^#\/?/, "").split("/");
+  if(h[0] === "share") return viewShare(h[1]);       // 공유받은 링크 (읽기 전용)
   if(h[0] === "new") return viewForm(null);
   if(h[0] === "edit"){
     const g = goals.find(g => g.id === h[1]);
@@ -486,7 +488,10 @@ function viewDetail(g){
         ${c.done ? `<span class="tag-done">획득!</span>` : ""}</div>
       ${g.reason ? `<p style="margin:6px 0 0">💭 ${esc(g.reason)}</p>` : ""}
       <p class="muted" style="margin:4px 0 14px">상품 가격 ${won(g.target)} · 1% = ${won(Math.round(c.cellAmount))}</p>
-      ${g.link ? `<p style="margin:0 0 14px"><a class="btn small" style="text-decoration:none;display:inline-block" href="${esc(g.link)}" target="_blank" rel="noopener noreferrer">🛒 상품 보러 가기</a></p>` : ""}
+      <div class="row" style="margin:0 0 14px">
+        ${g.link ? `<a class="btn small" style="text-decoration:none;display:inline-block" href="${esc(g.link)}" target="_blank" rel="noopener noreferrer">🛒 상품 보러 가기</a>` : ""}
+        <button class="btn small" id="share">🔗 공유 링크 만들기</button>
+      </div>
       ${puzzle(g, "big")}
       <div class="bar" style="height:14px;margin-top:14px"><i style="width:${c.pct}%"></i></div>
       <div class="row between muted"><span>${Math.floor(c.pct)}% 열었어요</span><span>${won(g.saved)} 모음</span></div>
@@ -503,13 +508,9 @@ function viewDetail(g){
 
     <div class="card">
       <h2>정기 납입</h2>
-      ${g.payDay ? `
-        <p class="muted" style="margin:0">매달 ${g.payDay}일 · ${won(g.monthly)}씩 자동 기록${c.done ? "" : ` · 다음 납입일 ${nextPayText(g.payDay)}`}</p>
-        ${autoList.length
-          ? `<ul class="hist">${autoList.map(r => rowHtml(r, `정기납입 ${r.round}회차`)).join("")}</ul>`
-          : `<p class="muted" style="margin:10px 0 0">아직 지난 납입일이 없어요.</p>`}
-        <p class="muted" style="margin:8px 0 0">납입일이 지나면 저절로 기록돼요. 실제로 저금하지 못했다면 ✕를 눌러 지워 주세요.</p>`
-      : `<p class="muted" style="margin:0 0 10px">정기납입일을 정하면 납입일마다 매달 모을 돈이 자동으로 기록돼요.</p>
+      ${g.payDay
+        ? (autoList.length ? `<ul class="hist" style="margin-top:0">${autoList.map(r => rowHtml(r, `정기납입 ${r.round}회차`)).join("")}</ul>` : "")
+        : `<p class="muted" style="margin:0 0 10px">정기납입일을 정하면 납입일마다 매달 모을 돈이 자동으로 기록돼요.</p>
         <button class="btn small" id="setPay">정기납입일 정하기</button>`}
       ${toolsHtml("auto", autoAll.length)}
     </div>
@@ -553,6 +554,7 @@ function viewDetail(g){
   $("#back").onclick = () => nav("/");
   $("#edit").onclick = () => nav("/edit/" + g.id);
   $("#del").onclick = () => deleteGoal(g, () => nav("/"));
+  $("#share").onclick = () => showShare(g, c);
 
   $("#amt").addEventListener("input", e => commaInput(e.target));
   $("#rec").onclick = () => {
@@ -624,6 +626,88 @@ function viewDetail(g){
     });
     out();
   }
+}
+
+/* =========================================================
+   공유 링크: 목표 내용을 링크 안에 담아서(서버 없이) 읽기 전용으로 보여줘요
+   - 담는 것: 이름, 이유, 이모지, 상품 가격, 모은 금액, 달성 예정일, 상품 링크, 퍼즐 모양(seed)
+   - 사진은 용량이 커서 담지 않아요 (이모지 그림으로 보여요)
+   ========================================================= */
+const SHARE_BASE = "https://saving-puzzle.vercel.app/";   // 파일로 열었을 때 공유 링크가 가리킬 주소
+const b64e = o => btoa(unescape(encodeURIComponent(JSON.stringify(o)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const b64d = s => JSON.parse(decodeURIComponent(escape(atob(String(s).replace(/-/g, "+").replace(/_/g, "/")))));
+function shareUrl(g, c){
+  const payload = {n: g.name, r: g.reason || "", e: g.emoji, t: g.target, s: g.saved,
+    d: (!c.done && c.date) ? fmtDate(c.date) : "", l: g.link || "", k: seedOf(g)};
+  const base = /^https?:$/.test(location.protocol) ? location.origin + location.pathname : SHARE_BASE;
+  return base + "#/share/" + b64e(payload);
+}
+function readShare(code){                      // 받은 링크를 안전하게 해석해요 (이상한 값은 걸러요)
+  try{
+    const o = b64d(code), t = Number(o.t), s = Number(o.s);
+    if(!o.n || !Number.isFinite(t) || !Number.isFinite(s) || t <= 0 || s < 0) return null;
+    return { id: "share", name: String(o.n).slice(0, 20), reason: String(o.r || "").slice(0, 60),
+      emoji: String(o.e || "🎁").slice(0, 4), target: t, saved: s, monthly: 0,
+      seed: Number.isInteger(o.k) && o.k > 0 ? o.k : 1,
+      date: /^\d{4}-\d{2}-\d{2}$/.test(o.d || "") ? o.d : "", link: normLink(o.l) };
+  }catch(e){ return null; }
+}
+function showShare(g, c){
+  const url = shareUrl(g, c);
+  $("#modal").innerHTML = `<div class="overlay"><div class="box">
+    <h2 style="font-size:22px">🔗 공유 링크</h2>
+    <p class="muted" style="margin:0 0 10px">링크를 열면 이 목표를 읽기 전용으로 볼 수 있어요.</p>
+    <input type="text" id="shareUrl" readonly value="${esc(url)}">
+    <p class="muted" style="margin:10px 0 0">⚠️ 링크를 아는 사람은 누구나 물건 이름, 이유, 상품 가격, 모은 금액을 볼 수 있어요. 내용이 링크 안에 들어 있어서 한 번 보내면 거둘 수 없어요.</p>
+    <div class="row" style="justify-content:center;margin-top:14px">
+      <button class="btn primary" id="copyShare">복사</button>
+      <button class="btn" id="closeShare">닫기</button></div>
+    <div class="muted" id="copyMsg" style="margin-top:8px"></div></div></div>`;
+  $("#shareUrl").onclick = e => e.target.select();
+  $("#closeShare").onclick = closeModal;
+  $("#copyShare").onclick = async () => {
+    const inp = $("#shareUrl"); inp.select();
+    try{ await navigator.clipboard.writeText(url); $("#copyMsg").textContent = "복사됐어요! 붙여넣어서 보내 보세요."; }
+    catch(e){
+      let ok = false; try{ ok = document.execCommand("copy"); }catch(_){}
+      $("#copyMsg").textContent = ok ? "복사됐어요! 붙여넣어서 보내 보세요." : "링크를 선택해서(Ctrl+C) 직접 복사해 주세요.";
+    }
+  };
+}
+function viewShare(code){                      // 공유받은 사람이 보는 읽기 전용 화면
+  const sg = readShare(code);
+  shareGoal = sg;
+  if(!sg){
+    $("#app").innerHTML = `<div class="card empty"><div class="big">🔗</div>
+      <h2>열 수 없는 링크예요</h2>
+      <p class="muted">링크가 잘렸거나 올바르지 않아요. 보낸 사람에게 다시 받아 주세요.</p>
+      <button class="btn primary" id="goHome">홈으로</button></div>`;
+    $("#goHome").onclick = () => nav("/");
+    return;
+  }
+  const c = calc(sg);
+  $("#app").innerHTML = `
+    <div class="card">
+      <div class="row between"><h2 style="margin:0">${esc(sg.emoji)} ${esc(sg.name)}</h2>
+        ${c.done ? `<span class="tag-done">획득!</span>` : ""}</div>
+      <p class="muted" style="margin:4px 0 0">공유받은 목표 · 읽기 전용</p>
+      ${sg.reason ? `<p style="margin:8px 0 0">💭 ${esc(sg.reason)}</p>` : ""}
+      ${sg.link ? `<p style="margin:12px 0 0"><a class="btn small" style="text-decoration:none;display:inline-block" href="${esc(sg.link)}" target="_blank" rel="noopener noreferrer">🛒 상품 보러 가기</a></p>` : ""}
+      <div style="height:14px"></div>
+      ${puzzle(sg, "big")}
+      <div class="bar" style="height:14px;margin-top:14px"><i style="width:${c.pct}%"></i></div>
+      <div class="row between muted"><span>${Math.floor(c.pct)}% 열었어요</span><span>${won(sg.saved)} 모음</span></div>
+      <div class="stats">
+        <div class="stat"><span class="muted">상품 가격</span><b>${won(sg.target)}</b></div>
+        <div class="stat"><span class="muted">달성 예정일</span><b>${c.done ? "-" : (sg.date || "-")}</b></div>
+        <div class="stat"><span class="muted">모은 돈</span><b>${won(sg.saved)}</b></div>
+        <div class="stat"><span class="muted">남은 금액</span><b>${won(c.remaining)} (${Math.ceil(c.remaining * 100 / sg.target)}%)</b></div>
+      </div>
+      <p class="muted" style="margin:12px 0 0">공유한 시점의 내용이에요. 이후에 바뀐 내용은 보이지 않아요.</p>
+    </div>
+    <button class="btn primary block" id="goHome">나도 위시 퍼즐 만들어 보기</button>`;
+  paintAll();
+  $("#goHome").onclick = () => nav("/");
 }
 
 /* ---------- 축하 화면 ---------- */
