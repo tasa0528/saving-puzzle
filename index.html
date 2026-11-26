@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>살 수 있을까?</title>
+<title>위시 퍼즐</title>
 <style>
   /* ===== 색·글씨 설정: 여기 값만 바꿔도 분위기가 바뀌어요 ===== */
   :root{
@@ -100,7 +100,7 @@
 <body>
 <div class="wrap">
   <header class="top">
-    <h1 id="logo">💸 살 수 있을까?</h1>
+    <h1 id="logo">💸 위시 퍼즐</h1>
     <span id="today"></span>
   </header>
   <main id="app"></main>
@@ -662,7 +662,7 @@ function exportData(){
   const blob = new Blob([JSON.stringify(goals, null, 2)], {type:"application/json"});
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `살수있을까-백업-${new Date().toISOString().slice(0,10)}.json`;
+  a.download = `위시퍼즐-백업-${new Date().toISOString().slice(0,10)}.json`;
   a.click(); URL.revokeObjectURL(a.href);
 }
 function importData(e){
